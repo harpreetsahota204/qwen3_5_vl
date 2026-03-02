@@ -30,7 +30,6 @@ from fiftyone.core.models import SupportsGetItem, TorchModelMixin
 from fiftyone.utils.torch import GetItem
 
 from transformers import Qwen3_5ForConditionalGeneration, AutoProcessor
-from transformers.utils.import_utils import is_flash_attn_2_available
 from qwen_vl_utils import process_vision_info
 
 logger = logging.getLogger(__name__)
@@ -306,8 +305,6 @@ class Qwen35VLBaseModel(fom.Model, fom.SamplesMixin, SupportsGetItem, TorchModel
 
         dtype:
             bfloat16 on Ampere+ GPUs (compute capability >= 8.0), else "auto".
-        attn_implementation:
-            flash_attention_2 if available, else sdpa (PyTorch built-in).
         """
         logger.info(f"Loading Qwen3.5 model from {self.config.model_path}")
 
@@ -319,16 +316,9 @@ class Qwen35VLBaseModel(fom.Model, fom.SamplesMixin, SupportsGetItem, TorchModel
                 model_kwargs["torch_dtype"] = torch.bfloat16
                 logger.info("Using bfloat16 (Ampere+ GPU detected)")
             else:
-                model_kwargs["dtype"] = "auto"
+                model_kwargs["torch_dtype"] = "auto"
         else:
-            model_kwargs["dtype"] = "auto"
-
-        if is_flash_attn_2_available():
-            model_kwargs["attn_implementation"] = "flash_attention_2"
-            logger.info("Using Flash Attention 2")
-        else:
-            model_kwargs["attn_implementation"] = "sdpa"
-            logger.info("Using SDPA attention")
+            model_kwargs["torch_dtype"] = "auto"
 
         self._model = Qwen3_5ForConditionalGeneration.from_pretrained(
             self.config.model_path,
