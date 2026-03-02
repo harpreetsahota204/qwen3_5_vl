@@ -331,6 +331,12 @@ class Qwen35VLBaseModel(fom.Model, fom.SamplesMixin, SupportsGetItem, TorchModel
             trust_remote_code=True,
         )
 
+        # Suppress "Setting pad_token_id to eos_token_id" warning on every
+        # generate() call by setting it once explicitly here.
+        self._model.generation_config.pad_token_id = (
+            self._processor.tokenizer.eos_token_id
+        )
+
         logger.info("Model loaded successfully")
 
     # -------------------------------------------------------------------------
