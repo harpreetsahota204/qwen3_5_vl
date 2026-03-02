@@ -214,7 +214,6 @@ class Qwen35VLBaseConfig(fout.TorchImageModelConfig):
         self.top_p = self.parse_number(d, "top_p", default=0.95)
         self.top_k = self.parse_number(d, "top_k", default=20)
         self.min_p = self.parse_number(d, "min_p", default=0.0)
-        self.presence_penalty = self.parse_number(d, "presence_penalty", default=1.5)
         self.repetition_penalty = self.parse_number(d, "repetition_penalty", default=1.0)
 
 
@@ -449,14 +448,6 @@ class Qwen35VLBaseModel(fom.Model, fom.SamplesMixin, SupportsGetItem, TorchModel
         self.config.min_p = value
 
     @property
-    def presence_penalty(self) -> float:
-        return self.config.presence_penalty
-
-    @presence_penalty.setter
-    def presence_penalty(self, value: float):
-        self.config.presence_penalty = value
-
-    @property
     def repetition_penalty(self) -> float:
         return self.config.repetition_penalty
 
@@ -629,8 +620,7 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         gen_kwargs: dict = {
             "max_new_tokens": self.config.max_new_tokens,
             "do_sample": self.config.do_sample,
-            "repetition_penalty": self.config.repetition_penalty,
-            "presence_penalty": self.config.presence_penalty,
+            "repetition_penalty": self.config.repetition_penalty
         }
         if self.config.do_sample:
             gen_kwargs.update(
@@ -1280,7 +1270,6 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             "max_new_tokens": self.config.max_new_tokens,
             "do_sample": self.config.do_sample,
             "repetition_penalty": self.config.repetition_penalty,
-            "presence_penalty": self.config.presence_penalty,
         }
         if self.config.do_sample:
             gen_kwargs.update(
