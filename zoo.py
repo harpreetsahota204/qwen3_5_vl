@@ -180,7 +180,12 @@ class Qwen35VLGetItem(GetItem):
 
     @property
     def required_keys(self) -> List[str]:
-        return ["filepath", "prompt_field", "metadata"]
+        # Only include fields that are guaranteed to exist on every sample.
+        # "prompt_field" is a logical key that enters field_mapping only when
+        # the user explicitly sets needs_fields = {"prompt_field": "my_field"}.
+        # Including it here would cause FiftyOne to try select_fields(["prompt_field"])
+        # which fails when no such field exists on the dataset.
+        return ["filepath", "metadata"]
 
     def __call__(self, sample_dict: dict) -> dict:
         return {
