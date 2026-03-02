@@ -588,35 +588,48 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         ]
 
     # -------------------------------------------------------------------------
-    # Inference
+    # Inference (batched)
     # -------------------------------------------------------------------------
 
-    def _run_image_inference(self, messages: list) -> str:
-        """Run image inference using native single-call apply_chat_template.
+    def _run_batch_image_inference(self, batch_messages: list) -> list:
+        """Run batched image inference across multiple samples in a single
+        model.generate() call.
 
-        Uses tokenize=True, return_dict=True so the processor handles both
-        tokenization and vision encoding in one call.
+        Left-padding is required for batched generation so that the generated
+        tokens are aligned on the right across the batch.
+
+        Args:
+            batch_messages: List of message lists, one per sample.
 
         Returns:
-            Generated output text (str)
+            List of output text strings, one per sample.
         """
         if self._model is None:
             self._load_model()
 
         device = next(self._model.parameters()).device
 
+        # Left-padding required for batched generation (generated tokens must
+        # be right-aligned across the batch).
+        self._processor.tokenizer.padding_side = "left"
+        if self._processor.tokenizer.pad_token_id is None:
+            self._processor.tokenizer.pad_token_id = (
+                self._processor.tokenizer.eos_token_id
+            )
+
         inputs = self._processor.apply_chat_template(
-            messages,
+            batch_messages,
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
             return_tensors="pt",
+            padding=True,
         ).to(device)
 
         gen_kwargs: dict = {
             "max_new_tokens": self.config.max_new_tokens,
             "do_sample": self.config.do_sample,
-            "repetition_penalty": self.config.repetition_penalty
+            "repetition_penalty": self.config.repetition_penalty,
         }
         if self.config.do_sample:
             gen_kwargs.update(
@@ -631,8 +644,10 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         with torch.no_grad():
             raw_ids = self._model.generate(**inputs, **gen_kwargs)
 
+        # Trim the input tokens (including any left-padding) from each
+        # generated sequence to leave only the newly generated tokens.
         trimmed = [
-            out[len(inp) :]
+            out[len(inp):]
             for inp, out in zip(inputs.input_ids, raw_ids)
         ]
 
@@ -640,7 +655,11 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
             trimmed,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
-        )[0]
+        )
+
+    def _run_image_inference(self, messages: list) -> str:
+        """Single-sample image inference. Delegates to the batch path."""
+        return self._run_batch_image_inference([messages])[0]
 
     # -------------------------------------------------------------------------
     # Output parsing — dispatcher
@@ -1018,7 +1037,11 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         return results[0]
 
     def predict_all(self, batch: list, samples=None) -> list:
-        """Batch image inference.
+        """Batch image inference with true GPU batching.
+
+        All samples in the batch are processed in a single model.generate()
+        call. The processor handles left-padding across variable-length inputs
+        (different image sizes / token counts).
 
         Args:
             batch:   List of dicts with "filepath" and "prompt" keys (from GetItem)
@@ -1033,21 +1056,25 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         if self._model is None:
             self._load_model()
 
-        results = []
-        for i, item in enumerate(batch):
-            filepath = item["filepath"]
-            sample = samples[i] if samples else None
-
+        # 1. Build messages for every sample in the batch
+        batch_messages = []
+        for item in batch:
             prompt = item.get("prompt") or self.config.prompt
             if not prompt:
                 raise ValueError(
                     f"No prompt provided for image operation '{self.config.operation}'. "
                     "Set model.prompt or pass prompt_field to apply_model()."
                 )
+            batch_messages.append(self._build_image_message(item["filepath"], prompt))
 
-            messages = self._build_image_message(filepath, prompt)
-            output_text = self._run_image_inference(messages)
-            label = self._parse_image_output(output_text, filepath, sample)
+        # 2. Single batched generate() call across all samples
+        output_texts = self._run_batch_image_inference(batch_messages)
+
+        # 3. Parse each output into FiftyOne labels
+        results = []
+        for i, (text, item) in enumerate(zip(output_texts, batch)):
+            sample = samples[i] if samples else None
+            label = self._parse_image_output(text, item["filepath"], sample)
             results.append(label)
 
         return results
