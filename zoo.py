@@ -663,40 +663,42 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         text: str,
         filepath: str,
         sample,
-    ):
+    ) -> dict:
         """Extract reasoning then dispatch to the appropriate converter.
 
-        For structured operations (detect, point, classify, detect_3d) the raw
-        prediction text is always stored as a 'raw_output' dynamic attribute on
-        the returned label container, regardless of whether JSON parsing
-        succeeded or failed. This ensures malformed model responses are still
-        captured and inspectable in the FiftyOne App.
+        Always returns a dict so FiftyOne stores each key as a separate field
+        prefixed by label_field (e.g. label_field="qdets" → qdets_detections,
+        qdets_raw). The "raw" key captures the full prediction text regardless
+        of whether structured parsing succeeded, making malformed responses
+        always inspectable.
         """
         reasoning, prediction = self._extract_reasoning(text)
 
         if self.config.operation == "vqa":
-            # Raw output IS the result for VQA — no container to attach to.
-            return prediction.strip()
+            # For VQA the response IS the raw output — no separate raw key needed.
+            return {"response": prediction.strip()}
 
         if self.config.operation == "detect":
-            result = self._to_detections(self._extract_json(prediction), reasoning)
-        elif self.config.operation == "point":
-            result = self._to_keypoints(self._extract_json(prediction), reasoning)
-        elif self.config.operation == "classify":
-            result = self._to_classifications(self._extract_json(prediction), reasoning)
-        elif self.config.operation == "detect_3d":
+            label = self._to_detections(self._extract_json(prediction), reasoning)
+            return {"detections": label, "raw": prediction}
+
+        if self.config.operation == "point":
+            label = self._to_keypoints(self._extract_json(prediction), reasoning)
+            return {"keypoints": label, "raw": prediction}
+
+        if self.config.operation == "classify":
+            label = self._to_classifications(self._extract_json(prediction), reasoning)
+            return {"classifications": label, "raw": prediction}
+
+        if self.config.operation == "detect_3d":
             cam_params = self._get_camera_params(sample, filepath)
-            result = self._to_3d_detections(
+            label = self._to_3d_detections(
                 self._extract_json(prediction), cam_params, reasoning
             )
-        else:
-            logger.warning(f"Unknown operation: {self.config.operation}")
-            return prediction.strip()
+            return {"detections_3d": label, "raw": prediction}
 
-        # Always attach the raw prediction text so callers can inspect what the
-        # model returned even when parsing produced an empty result.
-        result["raw_output"] = prediction
-        return result
+        logger.warning(f"Unknown operation: {self.config.operation}")
+        return {"raw": prediction}
 
     # -------------------------------------------------------------------------
     # Output converters — 2D
@@ -1672,9 +1674,8 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             messages = self._build_video_message(filepath, prompt)
             output_text, video_metadata = self._run_video_inference(messages)
             labels = self._parse_video_output(output_text, sample, video_metadata)
-            # Store the full model response so it is always recoverable,
-            # including when structured parsing produced empty results.
-            labels["raw_output"] = output_text
+            if sample is not None and self.config.raw_output_field:
+                sample[self.config.raw_output_field] = output_text
             results.append(labels)
 
         return results
