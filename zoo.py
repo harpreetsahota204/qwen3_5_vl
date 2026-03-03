@@ -50,19 +50,15 @@ DEFAULT_DETECT_SYSTEM_PROMPT = (
 )
 
 DEFAULT_POINT_SYSTEM_PROMPT = (
-    "You are a precise object pointing assistant. When asked to point to an object in "
-    "an image, you must return ONLY the exact center coordinates of that specific object "
-    "as [x, y] with values scaled between 0 and 1000 (where 0,0 is the top-left corner "
-    "and 1000,1000 is the bottom-right corner).\n"
-    "Rules:\n"
-    "1. ONLY point to objects that exactly match the description given.\n"
-    "2. Do NOT point to background, empty areas, or unrelated objects.\n"
-    "3. If there are multiple matching instances, return [[x1, y1], [x2, y2], ...].\n"
-    "4. If no matching object is found, return an empty list [].\n"
-    "5. Return ONLY the coordinate numbers, no explanations or other text.\n"
-    "6. Be extremely precise — place the point at the exact visual center of each "
-    "matching object."
+    "You are a helpful assistant to point to objects in images. "
+    "When asked to point to elements based on a description you return center coordinates "
+    "for all elements in the form of [x, y] with the values being "
+    "scaled between 0 and 1000. When there are more than one result, answer with a list "
+    "of coordinates in the form of [[x, y], ...]. "
+    "Return results as JSON array: "
+    '[{"point_2d": [x, y], "label": "object_name"}, ...].'
 )
+
 
 DEFAULT_CLASSIFY_SYSTEM_PROMPT = (
     "You are a helpful assistant specializing in comprehensive image classification. "
@@ -78,13 +74,10 @@ DEFAULT_VQA_SYSTEM_PROMPT = (
 )
 
 DEFAULT_DETECT_3D_SYSTEM_PROMPT = (
-    "You are a helpful assistant for 3D object detection. Detect the requested objects "
-    "in the image and predict their 3D bounding boxes. "
-    "Output JSON: "
-    '[{"bbox_3d": [x_center, y_center, z_center, x_size, y_size, z_size, roll, pitch, yaw], '
-    '"label": "category"}]. '
-    "bbox_3d values: position in camera coordinates (meters), dimensions (meters), "
-    "rotation angles as normalized fractions of pi."
+    "You are a helpful assistant for 3D object detection. "
+    "Detect the requested objects in the image and predict their 3D bounding boxes. "
+    'Output JSON: [{"bbox_3d": [x_center, y_center, z_center, x_size, y_size, z_size, '
+    'roll, pitch, yaw], "label": "category"}].'
 )
 
 IMAGE_OPERATIONS: Dict[str, str] = {
@@ -671,29 +664,39 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         filepath: str,
         sample,
     ):
-        """Extract reasoning then dispatch to the appropriate converter."""
+        """Extract reasoning then dispatch to the appropriate converter.
+
+        For structured operations (detect, point, classify, detect_3d) the raw
+        prediction text is always stored as a 'raw_output' dynamic attribute on
+        the returned label container, regardless of whether JSON parsing
+        succeeded or failed. This ensures malformed model responses are still
+        captured and inspectable in the FiftyOne App.
+        """
         reasoning, prediction = self._extract_reasoning(text)
 
         if self.config.operation == "vqa":
+            # Raw output IS the result for VQA — no container to attach to.
             return prediction.strip()
 
         if self.config.operation == "detect":
-            return self._to_detections(self._extract_json(prediction), reasoning)
-
-        if self.config.operation == "point":
-            return self._to_keypoints(self._extract_json(prediction), reasoning)
-
-        if self.config.operation == "classify":
-            return self._to_classifications(self._extract_json(prediction), reasoning)
-
-        if self.config.operation == "detect_3d":
+            result = self._to_detections(self._extract_json(prediction), reasoning)
+        elif self.config.operation == "point":
+            result = self._to_keypoints(self._extract_json(prediction), reasoning)
+        elif self.config.operation == "classify":
+            result = self._to_classifications(self._extract_json(prediction), reasoning)
+        elif self.config.operation == "detect_3d":
             cam_params = self._get_camera_params(sample, filepath)
-            return self._to_3d_detections(
+            result = self._to_3d_detections(
                 self._extract_json(prediction), cam_params, reasoning
             )
+        else:
+            logger.warning(f"Unknown operation: {self.config.operation}")
+            return prediction.strip()
 
-        logger.warning(f"Unknown operation: {self.config.operation}")
-        return prediction.strip()
+        # Always attach the raw prediction text so callers can inspect what the
+        # model returned even when parsing produced an empty result.
+        result["raw_output"] = prediction
+        return result
 
     # -------------------------------------------------------------------------
     # Output converters — 2D
@@ -1669,6 +1672,9 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             messages = self._build_video_message(filepath, prompt)
             output_text, video_metadata = self._run_video_inference(messages)
             labels = self._parse_video_output(output_text, sample, video_metadata)
+            # Store the full model response so it is always recoverable,
+            # including when structured parsing produced empty results.
+            labels["raw_output"] = output_text
             results.append(labels)
 
         return results
