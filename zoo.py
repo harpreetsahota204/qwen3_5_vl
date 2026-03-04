@@ -692,10 +692,10 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
 
         if self.config.operation == "detect_3d":
             cam_params = self._get_camera_params(sample, filepath)
-            label = self._to_3d_detections(
+            label = self._to_3d_cuboids(
                 self._extract_json(prediction), cam_params, reasoning
             )
-            return {"detections_3d": label, "raw": prediction}
+            return {"cuboids": label, "raw": prediction}
 
         logger.warning(f"Unknown operation: {self.config.operation}")
         return {"raw": prediction}
@@ -870,94 +870,113 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         fy = round(h / (2 * math.tan(half_fov)), 2)
         return {"fx": fx, "fy": fy, "cx": round(w / 2, 2), "cy": round(h / 2, 2)}
 
-    def _project_3d_corners(self, bbox_3d: list, cam_params: dict) -> list:
-        """Project 3D bounding box corners to 2D image coordinates.
+    def _project_3d_corners_ordered(
+        self, bbox_3d: list, cam_params: dict
+    ) -> Tuple[list, list]:
+        """Project all 8 3D bounding box corners to 2D in FiftyOne cuboid vertex order.
 
-        Follows 3d_grounding.py convention exactly:
-        - bbox_3d[6] → pitch, [7] → yaw, [8] → roll  (despite format docs saying roll,pitch,yaw)
-        - Angle values are fractions of π: radians = model_value * π
-        - Rotation applied: pitch → yaw → roll
+        Returns corners in the order expected by fo.Polyline.from_cuboid:
+            front face (near, -hz side): vertices 0-3
+            back  face (far,  +hz side): vertices 4-7
+
+        Within each face the order is: bottom-left, bottom-right, top-right, top-left.
+        Mapping from our ±hx/±hy/±hz corner indices to FO order: [5, 1, 3, 7, 4, 0, 2, 6]
+
+        Follows 3d_grounding.py convention:
+        - bbox_3d[6] → pitch, [7] → yaw, [8] → roll
+        - Angles are fractions of π: radians = model_value * π
+        - Rotation order: pitch → yaw → roll
 
         Args:
-            bbox_3d: [cx, cy, cz, sx, sy, sz, a0, a1, a2]
+            bbox_3d:    [cx, cy, cz, sx, sy, sz, a0, a1, a2]
             cam_params: {"fx", "fy", "cx", "cy"}
 
         Returns:
-            List of [x_2d, y_2d] for corners with Z > 0
+            projected: list of 8 (x_2d, y_2d) pixel coords, or None for corners behind camera
+            z_cam:     list of 8 Z values in camera space (positive = in front)
         """
         cx, cy, cz = bbox_3d[0], bbox_3d[1], bbox_3d[2]
         sx, sy, sz = bbox_3d[3], bbox_3d[4], bbox_3d[5]
-        # Unpack as pitch, yaw, roll per 3d_grounding.py line 93
         pitch = bbox_3d[6] * math.pi
-        yaw = bbox_3d[7] * math.pi
-        roll = bbox_3d[8] * math.pi
+        yaw   = bbox_3d[7] * math.pi
+        roll  = bbox_3d[8] * math.pi
 
         hx, hy, hz = sx / 2, sy / 2, sz / 2
+
+        # All 8 local corners indexed 0–7: [±hx, ±hy, ±hz]
         local_corners = [
-            [ hx,  hy,  hz],
-            [ hx,  hy, -hz],
-            [ hx, -hy,  hz],
-            [ hx, -hy, -hz],
-            [-hx,  hy,  hz],
-            [-hx,  hy, -hz],
-            [-hx, -hy,  hz],
-            [-hx, -hy, -hz],
+            [ hx,  hy,  hz],  # 0: +x +y +z
+            [ hx,  hy, -hz],  # 1: +x +y -z
+            [ hx, -hy,  hz],  # 2: +x -y +z
+            [ hx, -hy, -hz],  # 3: +x -y -z
+            [-hx,  hy,  hz],  # 4: -x +y +z
+            [-hx,  hy, -hz],  # 5: -x +y -z
+            [-hx, -hy,  hz],  # 6: -x -y +z
+            [-hx, -hy, -hz],  # 7: -x -y -z
         ]
+
+        # Reorder to FiftyOne from_cuboid convention:
+        #   front face (-hz, near): [5, 1, 3, 7]  → bottom-left, bottom-right, top-right, top-left
+        #   back  face (+hz, far):  [4, 0, 2, 6]  → bottom-left, bottom-right, top-right, top-left
+        fo_order = [5, 1, 3, 7, 4, 0, 2, 6]
 
         def rotate_xyz(pt, _pitch, _yaw, _roll):
             x0, y0, z0 = pt
-            # Pitch (around x-axis)
             x1 = x0
             y1 = y0 * math.cos(_pitch) - z0 * math.sin(_pitch)
             z1 = y0 * math.sin(_pitch) + z0 * math.cos(_pitch)
-            # Yaw (around y-axis)
             x2 = x1 * math.cos(_yaw) + z1 * math.sin(_yaw)
             y2 = y1
             z2 = -x1 * math.sin(_yaw) + z1 * math.cos(_yaw)
-            # Roll (around z-axis)
             x3 = x2 * math.cos(_roll) - y2 * math.sin(_roll)
             y3 = x2 * math.sin(_roll) + y2 * math.cos(_roll)
             z3 = z2
             return [x3, y3, z3]
 
-        img_corners = []
-        for corner in local_corners:
-            rotated = rotate_xyz(corner, pitch, yaw, roll)
+        projected = []
+        z_cam = []
+        for idx in fo_order:
+            rotated = rotate_xyz(local_corners[idx], pitch, yaw, roll)
             X = rotated[0] + cx
             Y = rotated[1] + cy
             Z = rotated[2] + cz
+            z_cam.append(Z)
             if Z > 0:
                 x_2d = cam_params["fx"] * (X / Z) + cam_params["cx"]
                 y_2d = cam_params["fy"] * (Y / Z) + cam_params["cy"]
-                img_corners.append([x_2d, y_2d])
+                projected.append((x_2d, y_2d))
+            else:
+                projected.append(None)
 
-        return img_corners
+        return projected, z_cam
 
-    def _to_3d_detections(
+    def _to_3d_cuboids(
         self, items, cam_params: dict, reasoning: Optional[str] = None
-    ) -> fo.Detections:
-        """Convert bbox_3d output to fo.Detections with 3D and 2D attributes.
+    ) -> fo.Polylines:
+        """Convert bbox_3d output to fo.Polylines using fo.Polyline.from_cuboid.
 
-        Each detection stores:
-            location, dimensions, rotation  — for FiftyOne 3D visualizer
-            bounding_box                    — 2D AABB of projected corners (regular viewer)
+        Projects all 8 3D corners to 2D in FiftyOne's expected cuboid vertex
+        order (front face then back face) and stores them as a proper cuboid
+        wireframe that renders correctly in the FiftyOne App.
 
-        rotation is stored in radians (model value * pi).
-        bounding_box is omitted if fewer than 4 corners project successfully.
+        3D attributes (location, dimensions, rotation) are stored as custom
+        dynamic attributes on each Polyline for reference.
+
+        If any corner projects behind the camera (Z ≤ 0), the detection is
+        skipped because from_cuboid requires all 8 visible vertices.
         """
         if not items:
-            return fo.Detections(detections=[])
+            return fo.Polylines(polylines=[])
 
         if isinstance(items, dict):
             items = [items]
         elif not isinstance(items, list):
-            return fo.Detections(detections=[])
+            return fo.Polylines(polylines=[])
 
-        # Image dims from principal point (cx = w/2, cy = h/2)
         img_w = cam_params["cx"] * 2
         img_h = cam_params["cy"] * 2
 
-        detections = []
+        polylines = []
         for item in items:
             try:
                 if isinstance(item, dict):
@@ -975,39 +994,45 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
                 bbox_3d = [float(v) for v in bbox_3d[:9]]
                 cx_3d, cy_3d, cz_3d = bbox_3d[0], bbox_3d[1], bbox_3d[2]
                 sx, sy, sz = bbox_3d[3], bbox_3d[4], bbox_3d[5]
-                # Store rotation in radians (model value * pi)
-                rotation_rad = [bbox_3d[6] * math.pi, bbox_3d[7] * math.pi, bbox_3d[8] * math.pi]
+                rotation_rad = [
+                    bbox_3d[6] * math.pi,
+                    bbox_3d[7] * math.pi,
+                    bbox_3d[8] * math.pi,
+                ]
 
-                det = fo.Detection(
+                # Project all 8 corners in FiftyOne cuboid vertex order
+                projected, _ = self._project_3d_corners_ordered(bbox_3d, cam_params)
+
+                # from_cuboid requires all 8 vertices in front of the camera
+                if any(p is None for p in projected):
+                    logger.debug(
+                        f"Skipping cuboid for '{label}': "
+                        "one or more corners are behind the camera (Z ≤ 0)"
+                    )
+                    continue
+
+                # Build pixel-coord vertex list and pass to from_cuboid
+                vertices = [(p[0], p[1]) for p in projected]
+                poly = fo.Polyline.from_cuboid(
+                    vertices,
+                    frame_size=(img_w, img_h),
                     label=label,
-                    location=[cx_3d, cy_3d, cz_3d],
-                    dimensions=[sx, sy, sz],
-                    rotation=rotation_rad,
                 )
 
-                # Project corners to get 2D bounding box
-                img_corners = self._project_3d_corners(bbox_3d, cam_params)
-                if len(img_corners) >= 4:
-                    xs = [c[0] for c in img_corners]
-                    ys = [c[1] for c in img_corners]
-                    x_min, x_max = min(xs), max(xs)
-                    y_min, y_max = min(ys), max(ys)
-                    det.bounding_box = [
-                        x_min / img_w,
-                        y_min / img_h,
-                        (x_max - x_min) / img_w,
-                        (y_max - y_min) / img_h,
-                    ]
+                # Store 3D attributes as custom fields for reference
+                poly["location"] = [cx_3d, cy_3d, cz_3d]
+                poly["dimensions"] = [sx, sy, sz]
+                poly["rotation"] = rotation_rad
 
                 if reasoning is not None:
-                    det["reasoning"] = reasoning
+                    poly["reasoning"] = reasoning
 
-                detections.append(det)
+                polylines.append(poly)
 
             except Exception as e:
-                logger.debug(f"Error processing 3D detection {item}: {e}")
+                logger.debug(f"Error processing 3D cuboid {item}: {e}")
 
-        return fo.Detections(detections=detections)
+        return fo.Polylines(polylines=polylines)
 
     # -------------------------------------------------------------------------
     # predict / predict_all
