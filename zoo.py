@@ -1497,7 +1497,12 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             messages = self._build_video_message(filepath, prompt)
             output_text, video_metadata = self._run_video_inference(messages)
             labels = self._parse_video_output(output_text, sample, video_metadata)
-            labels["raw"] = output_text
+            # Only add "raw" when all keys are strings (sample-level labels).
+            # For frame-level operations (tracking, ocr) the dict uses integer
+            # frame-number keys, and FiftyOne's add_labels would crash trying
+            # to call .items() on the raw string value.
+            if not any(isinstance(k, int) for k in labels):
+                labels["raw"] = output_text
             results.append(labels)
 
         return results
