@@ -2,7 +2,7 @@
 
 Provides image and video understanding via Qwen3.5 vision-language model.
 
-Image operations:  detect, point, classify, vqa, detect_3d
+Image operations:  detect, point, classify, vqa
 Video operations:  description, temporal_localization, tracking, ocr,
                    comprehensive, custom
 
@@ -146,7 +146,7 @@ def resolve_input(model_name: str, ctx):
         default="vqa",
         label="Operation",
         description=(
-            "Image ops: detect, point, classify, vqa, detect_3d. "
+            "Image ops: detect, point, classify, vqa. "
             "Video ops: description, temporal_localization, tracking, ocr, comprehensive."
         ),
     )
@@ -159,7 +159,7 @@ def resolve_input(model_name: str, ctx):
         default=None,
         required=False,
         label="Prompt",
-        description="User instruction for image operations (detect, point, classify, vqa, detect_3d)",
+        description="User instruction for image operations (detect, point, classify, vqa)",
     )
 
     inputs.str(
@@ -168,24 +168,6 @@ def resolve_input(model_name: str, ctx):
         required=False,
         label="System Prompt Override",
         description="Optional: override the default system prompt for image operations",
-    )
-
-    inputs.str(
-        "camera_intrinsics_field",
-        default=None,
-        required=False,
-        label="Camera Intrinsics Field (detect_3d)",
-        description=(
-            "Sample field name containing camera intrinsics dict "
-            "{'fx','fy','cx','cy'} for detect_3d. Leave empty to use FOV fallback."
-        ),
-    )
-
-    inputs.int(
-        "fov",
-        default=60,
-        label="Field of View in degrees (detect_3d fallback)",
-        description="Used to generate pseudo camera params when no intrinsics field is set",
     )
 
     # -------------------------------------------------------------------------
