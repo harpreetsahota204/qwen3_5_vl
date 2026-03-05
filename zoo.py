@@ -1014,23 +1014,62 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
         self.config.image_patch_size = value
 
     # -------------------------------------------------------------------------
+    # Frame extraction
+    # -------------------------------------------------------------------------
+
+    def _extract_frames(self, filepath: str) -> list:
+        """Extract frames from a video file using decord.
+
+        Samples up to max_frames frames at sample_fps rate.
+        Returns a list of PIL Images that the processor can tokenize directly,
+        avoiding the video_grid_thw mismatch that occurs when passing a raw
+        video file path to Qwen3.5's processor.
+        """
+        from decord import VideoReader, cpu
+        from PIL import Image as PILImage
+        import numpy as np
+
+        vr = VideoReader(filepath, ctx=cpu(0))
+        total_frames = len(vr)
+        video_fps = vr.get_avg_fps()
+
+        # Determine frame indices to sample
+        if self.config.sample_fps > 0 and video_fps > 0:
+            step = max(1, int(round(video_fps / self.config.sample_fps)))
+            indices = list(range(0, total_frames, step))
+        else:
+            indices = list(range(total_frames))
+
+        # Cap at max_frames
+        if len(indices) > self.config.max_frames:
+            indices = [
+                indices[int(i * (len(indices) - 1) / (self.config.max_frames - 1))]
+                for i in range(self.config.max_frames)
+            ]
+
+        frames_np = vr.get_batch(indices).asnumpy()
+        return [PILImage.fromarray(f) for f in frames_np]
+
+    # -------------------------------------------------------------------------
     # Message building
     # -------------------------------------------------------------------------
 
     def _build_video_message(self, filepath: str, prompt: str) -> list:
         """Build the messages list for video inference.
 
-        Uses the standard {"type": "video"} content format that
-        Qwen3.5's apply_chat_template handles natively, matching the
-        same single-call pattern used for image inference.
+        Extracts frames from the video file and passes them as a list of
+        PIL Images using the standard image content format. This avoids the
+        video_grid_thw mismatch that occurs when Qwen3.5's processor tries
+        to process a raw video file path directly.
         """
+        frames = self._extract_frames(filepath)
+        image_content = [
+            {"type": "image", "image": frame} for frame in frames
+        ]
         return [
             {
                 "role": "user",
-                "content": [
-                    {"type": "video", "video": filepath},
-                    {"type": "text", "text": prompt},
-                ],
+                "content": image_content + [{"type": "text", "text": prompt}],
             }
         ]
 
