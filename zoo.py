@@ -637,30 +637,29 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
 
         Always returns a dict so FiftyOne stores each key as a separate field
         prefixed by label_field (e.g. label_field="qdets" → qdets_detections,
-        qdets_raw). The "raw" key captures the full prediction text regardless
-        of whether structured parsing succeeded, making malformed responses
-        always inspectable.
+        qdets_raw). The "raw" key always contains the FULL unprocessed model
+        output, including any thinking/reasoning traces before </think>.
         """
         reasoning, prediction = self._extract_reasoning(text)
 
         if self.config.operation == "vqa":
-            # For VQA the response IS the raw output — no separate raw key needed.
-            return {"response": prediction.strip()}
+            # VQA output is always a plain string — no JSON parsing, no raw duplicate.
+            return {"response": text.strip()}
 
         if self.config.operation == "detect":
             label = self._to_detections(self._extract_json(prediction), reasoning)
-            return {"detections": label, "raw": prediction}
+            return {"detections": label, "raw": text}
 
         if self.config.operation == "point":
             label = self._to_keypoints(self._extract_json(prediction), reasoning)
-            return {"keypoints": label, "raw": prediction}
+            return {"keypoints": label, "raw": text}
 
         if self.config.operation == "classify":
             label = self._to_classifications(self._extract_json(prediction), reasoning)
-            return {"classifications": label, "raw": prediction}
+            return {"classifications": label, "raw": text}
 
         logger.warning(f"Unknown operation: {self.config.operation}")
-        return {"raw": prediction}
+        return {"raw": text}
 
     # -------------------------------------------------------------------------
     # Output converters — 2D
