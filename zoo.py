@@ -1308,6 +1308,10 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
     ) -> Optional[fol.TemporalDetections]:
         detections = []
         for item in items:
+            if not isinstance(item, dict):
+                logger.debug(f"Skipping non-dict item in temporal detections: {item!r}")
+                continue
+
             if label_type == "events":
                 start = item.get("start", "00:00.00")
                 end = item.get("end", "00:00.00")
@@ -1342,6 +1346,10 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
         frame_detections: dict = {}
 
         for item in items:
+            if not isinstance(item, dict):
+                logger.debug(f"Skipping non-dict item in frame detections: {item!r}")
+                continue
+
             frame_num = (
                 int(self._timestamp_to_seconds(item.get("time", "00:00.00")) * fps) + 1
             )
@@ -1489,6 +1497,7 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             messages = self._build_video_message(filepath, prompt)
             output_text, video_metadata = self._run_video_inference(messages)
             labels = self._parse_video_output(output_text, sample, video_metadata)
+            labels["raw"] = output_text
             results.append(labels)
 
         return results
