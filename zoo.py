@@ -30,7 +30,6 @@ from fiftyone.core.models import SupportsGetItem, TorchModelMixin
 from fiftyone.utils.torch import GetItem
 
 from transformers import Qwen3_5ForConditionalGeneration, AutoProcessor
-from qwen_vl_utils import process_vision_info
 
 logger = logging.getLogger(__name__)
 
@@ -1019,18 +1018,17 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
     # -------------------------------------------------------------------------
 
     def _build_video_message(self, filepath: str, prompt: str) -> list:
-        """Build the messages list for video inference."""
+        """Build the messages list for video inference.
+
+        Uses the standard {"type": "video"} content format that
+        Qwen3.5's apply_chat_template handles natively, matching the
+        same single-call pattern used for image inference.
+        """
         return [
             {
                 "role": "user",
                 "content": [
-                    {
-                        "video": filepath,
-                        "total_pixels": self.config.total_pixels,
-                        "min_pixels": self.config.min_pixels,
-                        "max_frames": self.config.max_frames,
-                        "sample_fps": self.config.sample_fps,
-                    },
+                    {"type": "video", "video": filepath},
                     {"type": "text", "text": prompt},
                 ],
             }
@@ -1041,43 +1039,34 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
     # -------------------------------------------------------------------------
 
     def _run_video_inference(self, messages: list) -> Tuple[str, dict]:
-        """Run video inference using the two-step process_vision_info approach.
+        """Run video inference using the same single-call apply_chat_template
+        approach as image inference.
+
+        The two-step process_vision_info pipeline is Qwen3-VL specific and
+        causes position-ID mismatches with Qwen3_5ForConditionalGeneration.
+        Qwen3.5 processes video content natively via apply_chat_template.
 
         Returns:
-            (output_text, video_metadata)
+            (output_text, video_metadata)  — video_metadata is empty dict;
+            FPS fallback chain in _get_video_fps handles temporal ops.
         """
         if self._model is None:
             self._load_model()
 
         device = next(self._model.parameters()).device
 
-        text = self._processor.apply_chat_template(
+        # Left-padding for generation consistency (mirrors image path)
+        self._processor.tokenizer.padding_side = "left"
+        if self._processor.tokenizer.pad_token_id is None:
+            self._processor.tokenizer.pad_token_id = (
+                self._processor.tokenizer.eos_token_id
+            )
+
+        inputs = self._processor.apply_chat_template(
             messages,
-            tokenize=False,
+            tokenize=True,
             add_generation_prompt=True,
-        )
-
-        image_inputs, video_inputs, video_kwargs = process_vision_info(
-            [messages],
-            return_video_kwargs=True,
-            image_patch_size=self.config.image_patch_size,
-            return_video_metadata=True,
-        )
-
-        if video_inputs:
-            video_inputs, video_metadatas = zip(*video_inputs)
-            video_inputs = list(video_inputs)
-            video_metadatas = list(video_metadatas)
-        else:
-            video_metadatas = [{}]
-
-        inputs = self._processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            video_metadata=video_metadatas,
-            **video_kwargs,
-            do_resize=False,
+            return_dict=True,
             return_tensors="pt",
         ).to(device)
 
@@ -1100,8 +1089,8 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             raw_ids = self._model.generate(**inputs, **gen_kwargs)
 
         trimmed = [
-            out[len(inp) :]
-            for inp, out in zip(inputs["input_ids"], raw_ids)
+            out[len(inp):]
+            for inp, out in zip(inputs.input_ids, raw_ids)
         ]
 
         output_text = self._processor.batch_decode(
@@ -1110,7 +1099,7 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             clean_up_tokenization_spaces=True,
         )[0]
 
-        return output_text, video_metadatas[0]
+        return output_text, {}
 
     # -------------------------------------------------------------------------
     # Output parsing — dispatcher
