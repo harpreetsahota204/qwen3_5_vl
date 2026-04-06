@@ -223,9 +223,9 @@ class Qwen35VLBaseModel(fom.Model, fom.SamplesMixin, SupportsGetItem, TorchModel
         self.device = get_device()
         self._fields: dict = {}
 
-        # Lazy loading
         self._model: Optional[Qwen3_5ForConditionalGeneration] = None
         self._processor: Optional[AutoProcessor] = None
+        self._load_model()
 
         logger.info(f"Initialized {self.__class__.__name__} (device: {self.device})")
 
@@ -565,9 +565,6 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         Returns:
             List of output text strings, one per sample.
         """
-        if self._model is None:
-            self._load_model()
-
         device = next(self._model.parameters()).device
 
         # Left-padding required for batched generation (generated tokens must
@@ -844,9 +841,6 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         if not batch:
             return []
 
-        if self._model is None:
-            self._load_model()
-
         # 1. Build messages for every sample in the batch
         batch_messages = []
         for item in batch:
@@ -1089,9 +1083,6 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
             (output_text, video_metadata)  — video_metadata is empty dict;
             FPS fallback chain in _get_video_fps handles temporal ops.
         """
-        if self._model is None:
-            self._load_model()
-
         device = next(self._model.parameters()).device
 
         # Left-padding for generation consistency (mirrors image path)
@@ -1469,9 +1460,6 @@ class Qwen35VLVideoModel(Qwen35VLBaseModel):
         """
         if not batch:
             return []
-
-        if self._model is None:
-            self._load_model()
 
         results = []
         for i, item in enumerate(batch):
