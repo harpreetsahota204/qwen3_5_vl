@@ -3,6 +3,42 @@
     "url": "https://github.com/harpreetsahota204/qwen35_vl",
     "models": [
         {
+            "base_name": "Qwen/Qwen3.5-35B-A3B-FP8",
+            "base_filename": "Qwen3.5-35B-A3B-FP8",
+            "author": "Qwen",
+            "license": "Apache-2.0",
+            "source": "https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8",
+            "description": "Qwen3.5 is a multimodal vision-language model supporting images and videos. Image operations: detect, point, classify, vqa, detect_3d. Video operations: description, temporal_localization, tracking, ocr, comprehensive, custom.",
+            "tags": [
+                "detection",
+                "classification",
+                "keypoints",
+                "vqa",
+                "temporal-detections",
+                "torch",
+                "zero-shot",
+                "image",
+                "video",
+                "3d-detection"
+            ],
+            "date_added": "2026-03-02",
+            "requirements": {
+                "packages": [
+                    "huggingface-hub",
+                    "transformers",
+                    "torch",
+                    "torchvision",
+                    "qwen-vl-utils"
+                ],
+                "cpu": {
+                    "support": true
+                },
+                "gpu": {
+                    "support": true
+                }
+            }
+        },
+        {
             "base_name": "Qwen/Qwen3.5-27B",
             "base_filename": "Qwen3.5-27B",
             "author": "Qwen",
@@ -28,8 +64,7 @@
                     "transformers",
                     "torch",
                     "torchvision",
-                    "qwen-vl-utils",
-                    "decord"
+                    "qwen-vl-utils"
                 ],
                 "cpu": {
                     "support": true
@@ -65,8 +100,7 @@
                     "transformers",
                     "torch",
                     "torchvision",
-                    "qwen-vl-utils",
-                    "decord"
+                    "qwen-vl-utils"
                 ],
                 "cpu": {
                     "support": true
@@ -102,8 +136,7 @@
                     "transformers",
                     "torch",
                     "torchvision",
-                    "qwen-vl-utils",
-                    "decord"
+                    "qwen-vl-utils"
                 ],
                 "cpu": {
                     "support": true
@@ -139,8 +172,7 @@
                     "transformers",
                     "torch",
                     "torchvision",
-                    "qwen-vl-utils",
-                    "decord"
+                    "qwen-vl-utils"
                 ],
                 "cpu": {
                     "support": true
@@ -176,8 +208,7 @@
                     "transformers",
                     "torch",
                     "torchvision",
-                    "qwen-vl-utils",
-                    "decord"
+                    "qwen-vl-utils"
                 ],
                 "cpu": {
                     "support": true
@@ -213,8 +244,7 @@
                     "transformers",
                     "torch",
                     "torchvision",
-                    "qwen-vl-utils",
-                    "decord"
+                    "qwen-vl-utils"
                 ],
                 "cpu": {
                     "support": true
