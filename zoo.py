@@ -639,8 +639,7 @@ class Qwen35VLImageModel(Qwen35VLBaseModel):
         reasoning, prediction = self._extract_reasoning(text)
 
         if self.config.operation == "vqa":
-            # VQA output is always a plain string — no JSON parsing, no raw duplicate.
-            return {"response": text.strip()}
+            return prediction
 
         if self.config.operation == "detect":
             label = self._to_detections(self._extract_json(prediction), reasoning)
